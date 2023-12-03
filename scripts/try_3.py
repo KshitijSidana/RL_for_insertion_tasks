@@ -22,7 +22,9 @@ from stable_baselines3.sac import SAC
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.sac.policies import MlpPolicy
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-
+from stable_baselines3 import A2C
+from stable_baselines3.common.logger import configure
+from stable_baselines3.common import noise
 
 SCENE_FILE = './sim/non_pure_non_convex_min_parts.ttt'
 POS_MIN, POS_MAX = [0.8, -0.2, 1.0], [1.0, 0.2, 1.4]
@@ -202,7 +204,7 @@ class LqrEnv(gym.Env):
 
         self.step_counter += 1
         # print(orientation_reward)
-        print(self.step_counter," ",distance_reward*10," ",success_reward," ","orientation_reward n/a"," ",reward)
+        print(f"tep_counter {self.step_counter}, distance*10 {distance_reward*10}, success_reward {success_reward}, orientation_reward n/a  reward {reward}")
         # return self._get_state(),reward,done,info
             
         
@@ -340,11 +342,11 @@ class LqrEnv(gym.Env):
         
         
         d_total = sum([d_top, d_right, d_left, d_bottom])
-        distance_reward = -1*d_total + DISTANCE*4
+        distance_reward = -1*d_total
 
         
         if d_total < DISTANCE*4 :
-            success_reward = +10.0
+            success_reward = +100.0
             success = True
 
         return distance_reward, success_reward, success
@@ -373,14 +375,26 @@ class Agent(object):
 
 
 if __name__ == "__main__":
-    env = LqrEnv()
+
+    NAME = "SAC_MlpPolicy_001"
+
+    env = LqrEnv(episode_length=300)
     # Assuming 'env' is your environment
     env = Monitor(env)  # Wrap with Monitor if needed
     env = DummyVecEnv([lambda: env])  # Wrap with DummyVecEnv
 
     # Use VecNormalize for normalizing observations
     # env = VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=255.0)
+    tmp_path = "tmp/sb3_log/"
+    # set up logger
+    new_logger = configure(tmp_path, ["stdout", "csv", "tensorboard"])
 
-    model = SAC(MlpPolicy, env, verbose=1)
-    model.learn(total_timesteps=25, progress_bar = True)
-    model.save("a2c_robotic_arm")
+    n_actions = env.action_space.shape[-1]
+    action_noise = noise.NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
+
+    model = SAC(MlpPolicy, env, verbose=1, action_noise=action_noise)
+    model.load("SAC_MlpPolicy_000")
+    model.set_logger(new_logger)
+    model.learn(total_timesteps=25000, progress_bar = True)
+
+    model.save(NAME)

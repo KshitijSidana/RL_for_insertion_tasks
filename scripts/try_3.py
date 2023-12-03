@@ -12,10 +12,11 @@ import gymnasium as gym
 from gymnasium.utils import seeding
 
 from pyrep import PyRep
-from pyrep.objects.shape import Shape
+from pyrep.objects.shape import Shape, collections
 from pyrep.robots.arms.ur5 import UR5
 from pyrep.objects.vision_sensor import VisionSensor
 from pyrep.const import TextureMappingMode, RenderMode
+from pyrep.backend import sim
 
 from stable_baselines3.sac import SAC
 from stable_baselines3.common.monitor import Monitor
@@ -25,7 +26,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 SCENE_FILE = './sim/non_pure_non_convex_min_parts.ttt'
 POS_MIN, POS_MAX = [0.8, -0.2, 1.0], [1.0, 0.2, 1.4]
-EPISODES = 5
+EPISODES = 2
 EPISODE_LENGTH = 200
 
 counter = 0
@@ -37,7 +38,7 @@ class TrainingType(Enum):
 
 
 class LqrEnv(gym.Env):
-    def __init__(self, headless=True, episode_length=150, training_type=TrainingType.BASELINE):#, size, init_state, state_bound):
+    def __init__(self, headless=False, episode_length=150, training_type=TrainingType.BASELINE):#, size, init_state, state_bound):
         # self.init_state = init_state
         # self.size = size 
         # self.action_space = spaces.Box(low=-state_bound, high=state_bound, shape=(size,))
@@ -49,6 +50,7 @@ class LqrEnv(gym.Env):
         
         self.episode_length = episode_length
         self.training_type = training_type
+        self.step_counter = 0
         
         # -------------------------------------------------
         # Initialize VecNormalize parameters manually
@@ -88,8 +90,8 @@ class LqrEnv(gym.Env):
         # # Normalize Action space between [-1,1]
         # self.action_space = box.Box(low=-1., high=1., shape=(6,), dtype=float)
         # Normalize Action space between [-1,1]
-        # self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=float)
-        self.action_space = self.agent.action_space
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=float)
+        # self.action_space = self.agent.action_space()
         # --------------------------------------------------
         # Sensors
         self.vision_sensor = VisionSensor("kinect_rgb")
@@ -119,9 +121,13 @@ class LqrEnv(gym.Env):
     def reset(self, seed=None, options=None):
         state = self._get_state()
         print("------>",state)
+        
+        self.step_counter = 0
         self.setup_scene()
+        
         if self.norm_obs:
             state = self.normalize_observation(state)
+        
         return state
 
     def step(self, action):
@@ -148,10 +154,10 @@ class LqrEnv(gym.Env):
         #------------------------------------------------
         # Reward calculations
 
-        success_reward, success = self.reward_success()
-        distance_reward = (prev_distance_to_goal - self.reward_distance_to_goal())/self.initial_distance # Relative distance reward
-        orientation_reward = (previous_orientation_reward - self.reward_orientation())/self.initial_orientation # Relative orientation reward
-        reward = (distance_reward * 10) + success_reward + orientation_reward
+        distance_reward, success_reward, success = self.reward_success()
+        # distance_reward = (prev_distance_to_goal - self.reward_distance_to_goal())/self.initial_distance # Relative distance reward
+        # orientation_reward = (previous_orientation_reward - self.reward_orientation())/self.initial_orientation # Relative orientation reward
+        reward = (distance_reward * 10) + success_reward #+ orientation_reward
 
         #------------------------------------------------
         if self.step_counter % self.episode_length == 0:
@@ -164,18 +170,32 @@ class LqrEnv(gym.Env):
             info = {"Cause":"Success"}
             print('--------Reset: Success is true--------')
 
-        if self.dining_table.check_collision() or self.door.check_collision(obj=self.agent) \
-            or self.gripper.check_collision(obj=self.door) or self.gripper.check_collision(obj=self.handle) \
-            or abs(self.force_sensor.read()[0][2]) > 100:
+        # collision_plug_port = self.pr. simCheckCollision(self.pr.get_collection_handle_by_name('Plug'))
+        # Shape(self.pr.get_collection_handle_by_name('Port')).check_collision(Shape(self.pr.get_collection_handle_by_name('Port')))
+
+        collision_agent_wall, collision_agent_port, collision_plug, collision_port, collision_floor = None, None, None, None, None  
+
+        collision_agent_wall = self.agent.check_arm_collision(Shape('Wall')) 
+        
+        for no in [0, 1, 2, 3, 6, 7, 8, 21, 22, 23, 24, 25, 26, 27]:
+            collision_agent_port = collision_agent_port or self.agent.check_arm_collision(Shape('Cuboid'+str(no))) 
+        # collision_port = sim.simCheckCollision(self.pr.get_collection_handle_by_name('Port'), sim.sim_handle_all)
+        # collision_plug = sim.simCheckCollision(self.pr.get_collection_handle_by_name('Plug'), sim.sim_handle_all)
+
+        if collision_agent_wall or collision_agent_port or collision_plug or collision_port:
+
+        # if self.dining_table.check_collision() or self.door.check_collision(obj=self.agent) \
+            # or self.gripper.check_collision(obj=self.door) or self.gripper.check_collision(obj=self.handle) \
+            # or abs(self.force_sensor.read()[0][2]) > 100:
             done = True
             info = {"Cause":"Collision"}
-            reward += -10
-            print(self.gripper.check_collision(obj=self.handle)," ",self.gripper.check_collision(obj=self.door))
+            reward += -100
+            print(f"collision_agent_port {collision_agent_port}, collision_agent_wall {collision_agent_wall}, collision_plug {collision_plug}, collision_port {collision_port}, collision_floor {collision_floor}")
             print("----- Reset: Collision -----")
 
         self.step_counter += 1
         # print(orientation_reward)
-        print(self.step_counter," ",distance_reward*10," ",success_reward," ",orientation_reward," ",reward)
+        print(self.step_counter," ",distance_reward*10," ",success_reward," ","orientation_reward n/a"," ",reward)
         # return self._get_state(),reward,done,info
             
         
@@ -192,9 +212,9 @@ class LqrEnv(gym.Env):
         obs_low = np.asarray([val[0] for val in self.agent.get_joint_intervals()[1]])
         obs_high = np.asarray([val[1] for val in self.agent.get_joint_intervals()[1]])
         
-        obs["agent"] = : self._agent_location, "target": self._target_location}
+        # normalized_obs = {"agent": (obs["agent"] - obs_low) / (obs_high - obs_low), "target": self.target.get_position()}  
+        normalized_obs = (obs - obs_low) / (obs_high - obs_low)  
         
-        normalized_obs = (obs["agent"] - obs_low) / (obs_high - obs_low)
         return normalized_obs
 
 
@@ -237,9 +257,10 @@ class LqrEnv(gym.Env):
         #     joint_pos = self.agent.get_joint_positions()
         #     final_state = np.concatenate((joint_pos , current_representation , goal_representation))
 
-        # return final_state
+        return final_state
 
-        return {"agent": self.agent.get_joint_positions(), "target": self.target.get_position()}
+        # return {"agent": self.agent.get_joint_positions(), "target": self.target.get_position()}
+        # return self.agent.get_joint_positions()
 
     def _get_info(self):
         return {"distance": np.linalg.norm(self.agent.get_joint_positions() - self._target_location, ord=1)}
@@ -272,19 +293,55 @@ class LqrEnv(gym.Env):
         return orientation_value
 
 
+    # def reward_success(self):
+    #     DISTANCE = 0.03
+    #     success_reward = -1 # default reward per timestep
+    #     success = False
+
+    #     if self.proximity_sensor.read() < DISTANCE and \
+    #             self.proximity_sensor.read() != -1 and \
+    #             self.proximity_sensor.is_detected(self.handle):
+    #         success_reward = +10.0
+    #         success = True
+
+    #     return success_reward, success
+    
     def reward_success(self):
         DISTANCE = 0.03
         success_reward = -1 # default reward per timestep
         success = False
+        
+        # Distance
+        ###> Top
+        d_top = 0.0
+        d_top += Shape('Cuboid1').check_distance(Shape('Cuboid28'))
+        d_top += Shape('Cuboid3').check_distance(Shape('Cuboid26'))
+        
+        ###> Right
+        d_right = 0.0
+        d_right += Shape('Cuboid2').check_distance(Shape('Cuboid17'))
+        
+        ###> Left
+        d_left = 0.0
+        d_left += Shape('Cuboid0' ).check_distance(Shape('Cuboid9'))
+        
+        ###> Bottom 
+        d_bottom = 0.0
+        d_bottom += Shape('Cuboid6').check_distance(Shape('Cuboid31'))
+        d_bottom += Shape('Cuboid7').check_distance(Shape('Cuboid30'))
+        
+        
+        d_total = sum([d_top, d_right, d_left, d_bottom])
+        distance_reward = -1*d_total + DISTANCE*4
 
-        if self.proximity_sensor.read() < DISTANCE and \
-                self.proximity_sensor.read() != -1 and \
-                self.proximity_sensor.is_detected(self.handle):
+        
+        if d_total < DISTANCE*4 :
             success_reward = +10.0
             success = True
 
-        return success_reward, success
-    
+        return distance_reward, success_reward, success
+
+
     def shutdown(self):
         self.pr.stop()
         self.pr.shutdown()
@@ -317,5 +374,5 @@ if __name__ == "__main__":
     # env = VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=255.0)
 
     model = SAC(MlpPolicy, env, verbose=1)
-    model.learn(total_timesteps=25000)
+    model.learn(total_timesteps=25, n_eval_episodes = EPISODES)
     model.save("a2c_robotic_arm")

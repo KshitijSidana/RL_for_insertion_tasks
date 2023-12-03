@@ -158,7 +158,7 @@ class LqrEnv(gym.Env):
         # Reward calculations
 
         distance, success_reward, success = self.reward_success()
-        distance_reward = (prev_distance_to_goal - distance)/self.initial_distance # Relative distance reward
+        distance_reward = (distance - prev_distance_to_goal)/self.initial_distance # Relative distance reward
         # orientation_reward = (previous_orientation_reward - self.reward_orientation())/self.initial_orientation # Relative orientation reward
         reward = (distance_reward * 10) + success_reward #+ orientation_reward
 
@@ -177,12 +177,15 @@ class LqrEnv(gym.Env):
         # collision_plug_port = self.pr. simCheckCollision(self.pr.get_collection_handle_by_name('Plug'))
         # Shape(self.pr.get_collection_handle_by_name('Port')).check_collision(Shape(self.pr.get_collection_handle_by_name('Port')))
 
-        collision_agent_wall, collision_agent_port, collision_plug, collision_port, collision_floor = None, None, None, None, None  
+        collision_agent_wall, collision_agent_port, collision_plug, collision_port, collision_floor = False, False, False, False, False  
 
         collision_agent_wall = self.agent.check_arm_collision(Shape('Wall')) 
         
-        for no in [0, 1, 2, 3, 6, 7, 8, 21, 22, 23, 24, 25, 26, 27]:
-            collision_agent_port = collision_agent_port or self.agent.check_arm_collision(Shape('Cuboid'+str(no))) 
+        for no in [0, 1, 2, 3, 6, 7, 8, 21, 22, 23, 24, 25, 27]:
+            collision_port = self.agent.check_arm_collision(Shape('Cuboid'+str(no)))
+            if collision_port:
+                print(f"Cuboid{no}") 
+            collision_agent_port = collision_agent_port or collision_port
         # collision_port = sim.simCheckCollision(self.pr.get_collection_handle_by_name('Port'), sim.sim_handle_all)
         # collision_plug = sim.simCheckCollision(self.pr.get_collection_handle_by_name('Plug'), sim.sim_handle_all)
 

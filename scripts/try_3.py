@@ -4,10 +4,10 @@ import random
 import numpy as np
 from enum import Enum
 
-from gym import spaces
+# from gym import spaces
 
 import gymnasium as gym
-# from gymnasium import spaces
+from gymnasium import spaces
 # from gymnasium.spaces import box
 from gymnasium.utils import seeding
 
@@ -121,17 +121,18 @@ class LqrEnv(gym.Env):
     def reset(self, seed=None, options=None):
         state = self._get_state()
         print("------>",state)
-        
+        temp =  self.step_counter
         self.step_counter = 0
         self.setup_scene()
         
         if self.norm_obs:
             state = self.normalize_observation(state)
         
-        return state
+        return state, temp
 
     def step(self, action):
         done = False
+        truncated = False
         info = {}
         prev_distance_to_goal = self.reward_distance_to_goal()
         previous_orientation_reward = self.reward_orientation()
@@ -148,20 +149,23 @@ class LqrEnv(gym.Env):
             denorm_action.append(new)
 
         # denorm_action[:6] = [0,0,0,0,0,0]
-        self.agent.set_joint_target_velocities(denorm_action) # Try this
+        # self.agent.set_joint_target_velocities(denorm_action) # Try this
+        # self.agent.set_joint_positions([0.5,0.5,0.5,0.5,0.5,0.5]) # Try this
+        self.agent.set_joint_positions(denorm_action) # Try this
         self.pr.step()  # Step the physics simulation
 
         #------------------------------------------------
         # Reward calculations
 
-        distance_reward, success_reward, success = self.reward_success()
-        # distance_reward = (prev_distance_to_goal - self.reward_distance_to_goal())/self.initial_distance # Relative distance reward
+        distance, success_reward, success = self.reward_success()
+        distance_reward = (prev_distance_to_goal - distance)/self.initial_distance # Relative distance reward
         # orientation_reward = (previous_orientation_reward - self.reward_orientation())/self.initial_orientation # Relative orientation reward
         reward = (distance_reward * 10) + success_reward #+ orientation_reward
 
         #------------------------------------------------
         if self.step_counter % self.episode_length == 0:
             done = True
+            truncated = True
             info = {"Cause":"Timeout"}
             print('--------Reset: Timeout--------')
 
@@ -205,7 +209,8 @@ class LqrEnv(gym.Env):
         else:
             next_state = self._get_state()
         
-        return self._get_state(),reward,done,info
+        
+        return self._get_state(),reward,done,truncated,info
     
     def normalize_observation(self, obs):
         # Normalize the values to a specific range
@@ -279,8 +284,8 @@ class LqrEnv(gym.Env):
         reward = np.linalg.norm(agent_position - target_position)
 
         # Reset environment with initial conditions
-        self.agent.set_joint_target_velocities([0,0,0,0,0,0])
-        self.agent.set_joint_target_positions([0,0,0,0,0,0])
+        self.agent.set_joint_target_velocities([0,10,10,10,0,0])
+        # self.agent.set_joint_target_positions([0,0,0,0,0,0])
 
         return reward
 
@@ -374,5 +379,5 @@ if __name__ == "__main__":
     # env = VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=255.0)
 
     model = SAC(MlpPolicy, env, verbose=1)
-    model.learn(total_timesteps=25, n_eval_episodes = EPISODES)
+    model.learn(total_timesteps=25, progress_bar = True)
     model.save("a2c_robotic_arm")
